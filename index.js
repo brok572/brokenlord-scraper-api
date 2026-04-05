@@ -1,6 +1,5 @@
 import express from "express";
 import axios from "axios";
-import * as cheerio from "cheerio";
 
 const app = express();
 
@@ -14,7 +13,7 @@ app.get("/", (req, res) => {
   });
 });
 
-// ---------------- SCRAPER ----------------
+// ---------------- SCRAPER (SAFE VERSION) ----------------
 app.get("/scrape", async (req, res) => {
   const target = req.query.url;
 
@@ -36,8 +35,8 @@ app.get("/scrape", async (req, res) => {
 
   try {
     const response = await axios.get(target, {
-      timeout: 10000,
-      maxRedirects: 5,
+      timeout: 8000,
+      maxRedirects: 3,
       headers: {
         "User-Agent": "BrokenLordScraper/1.0"
       },
@@ -45,35 +44,28 @@ app.get("/scrape", async (req, res) => {
     });
 
     const html = typeof response.data === "string" ? response.data : "";
-    const $ = cheerio.load(html);
 
-    const title = $("title").first().text() || null;
-    const description =
-      $('meta[name="description"]').attr("content") ||
-      $('meta[property="og:description"]').attr("content") ||
-      null;
+    // -------- SAFE REGEX PARSING (NO CHEERIO) --------
+    const titleMatch = html.match(/<title>(.*?)<\\/title>/i);
+    const title = titleMatch ? titleMatch[1] : null;
 
-    const ogTitle = $('meta[property="og:title"]').attr("content") || null;
-    const ogImage = $('meta[property="og:image"]').attr("content") || null;
+    const descMatch = html.match(
+      /<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["']/i
+    );
+    const description = descMatch ? descMatch[1] : null;
 
-    const metaTags = [];
-    $("meta").each((_, el) => {
-      const name = $(el).attr("name") || $(el).attr("property");
-      const content = $(el).attr("content");
-      if (name && content) metaTags.push({ name, content });
-    });
+    const ogImageMatch = html.match(
+      /<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']*)["']/i
+    );
+    const ogImage = ogImageMatch ? ogImageMatch[1] : null;
 
-    const links = [];
-    $("a[href]").each((_, el) => {
-      const href = $(el).attr("href");
-      if (href) links.push(href);
-    });
+    const links = [...html.matchAll(/href=["']([^"']+)["']/gi)]
+      .map(m => m[1])
+      .slice(0, 100);
 
-    const images = [];
-    $("img[src]").each((_, el) => {
-      const src = $(el).attr("src");
-      if (src) images.push(src);
-    });
+    const images = [...html.matchAll(/<img[^>]*src=["']([^"']+)["']/gi)]
+      .map(m => m[1])
+      .slice(0, 100);
 
     res.json({
       status: true,
@@ -81,27 +73,25 @@ app.get("/scrape", async (req, res) => {
       url: target,
       info: {
         status_code: response.status,
-        content_type: response.headers["content-type"] || null,
-        content_length: response.headers["content-length"] || null
+        content_type: response.headers["content-type"] || null
       },
       meta: {
         title,
         description,
-        og_title: ogTitle,
-        og_image: ogImage,
-        meta_tags: metaTags.slice(0, 50)
+        og_image: ogImage
       },
       content: {
-        links: links.slice(0, 200),
-        images: images.slice(0, 200)
+        links,
+        images
       }
     });
+
   } catch (err) {
     res.status(500).json({
       status: false,
       brand: "Broken Lord",
-      error: "Failed to fetch or parse URL",
-      detail: err.message || String(err)
+      error: "Failed to fetch URL",
+      detail: err.message
     });
   }
 });
